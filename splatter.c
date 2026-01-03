@@ -286,7 +286,7 @@ GaussianCloud mesh_to_gaussians(const char* obj_file, const char* texture_file, 
         Vec3 edge1 = vec3_sub(tri->v1, tri->v0);
         Vec3 edge2 = vec3_sub(tri->v2, tri->v0);
         float area = vec3_length(vec3_cross(edge1, edge2)) * 0.5f;
-        float size = sqrtf(area / samples) * 0.15f;  // Much smaller!
+        float size = sqrtf(area / samples) * 0.8f;
 
         for (int s = 0; s < samples; s++) {
             float r1 = (float)rand() / (float)RAND_MAX;
@@ -310,7 +310,7 @@ GaussianCloud mesh_to_gaussians(const char* obj_file, const char* texture_file, 
             g.position = pos;
             g.radius = size;
             g.color = sample_texture(&mesh, uv.u, uv.v);
-            g.opacity = 0.5f;  // Lower opacity
+            g.opacity = 0.9f;
 
             add_gaussian(&cloud, g);
         }
@@ -337,7 +337,7 @@ typedef struct {
 
 int compare_depth(const void* a, const void* b) {
     float diff = ((DepthIndex*)a)->depth - ((DepthIndex*)b)->depth;
-    return (diff < 0) ? 1 : (diff > 0 ? -1 : 0);
+    return (diff < 0) ? -1 : (diff > 0 ? 1 : 0);
 }
 
 void render_frame(GaussianCloud* clouds, int cloud_count, Camera* camera,
@@ -347,7 +347,7 @@ void render_frame(GaussianCloud* clouds, int cloud_count, Camera* camera,
     // EXACT same camera setup as raytracer
     Vec3 forward = vec3_normalize(vec3_sub(camera->look_at, camera->position));
     Vec3 right = vec3_normalize(vec3_cross(forward, camera->up));
-    Vec3 camera_up = vec3_cross(right, forward);  // Note: camera_up, not just up
+    Vec3 camera_up = vec3_cross(right, forward);
     float scale = tanf((camera->fov * 0.5f) * M_PI / 180.0f);
 
     // Count total gaussians
@@ -377,19 +377,16 @@ void render_frame(GaussianCloud* clouds, int cloud_count, Camera* camera,
             Gaussian* g = &clouds[c].gaussians[i];
             Vec3 world_pos = mat4_transform_point(transform, g->position);
 
-            // Transform to camera space - EXACT same as raytracer
+            // Transform to camera space
             Vec3 cam_pos = vec3_sub(world_pos, camera->position);
             float x = vec3_dot(cam_pos, right);
-            float y = vec3_dot(cam_pos, camera_up);  // Use camera_up!
+            float y = vec3_dot(cam_pos, camera_up);
             float z = vec3_dot(cam_pos, forward);
 
             if (z > 0.1f) {
                 indices[idx].depth = z;
                 indices[idx].index = idx;
                 
-                // Inverse of raytracer projection
-                // raytracer: ray_x = (2*screen_x - 1) * aspect * scale
-                // inverse: screen_x = (ray_x / (aspect * scale) + 1) / 2
                 float ray_x = x / z;
                 float ray_y = y / z;
                 
@@ -491,7 +488,7 @@ int main() {
     
     int width = 800, height = 600;
     int fps = 24;
-    int duration_ms = 1000;
+    int duration_ms = 4000;
     int frame_count = (duration_ms * fps) / 1000;
 
     Camera camera = {
@@ -501,12 +498,12 @@ int main() {
         .fov = 60.0f
     };
 
-    // Create clouds with MORE samples
+    // Create clouds
     printf("Loading meshes and creating gaussian clouds...\n");
     GaussianCloud clouds[3];
-    clouds[0] = mesh_to_gaussians("drone.obj", "drone.webp", 10);
-    clouds[1] = mesh_to_gaussians("treasure.obj", "treasure.webp", 8);
-    clouds[2] = mesh_to_gaussians("ground.obj", "ground.webp", 5);
+    clouds[0] = mesh_to_gaussians("drone.obj", "drone.webp", 2);
+    clouds[1] = mesh_to_gaussians("treasure.obj", "treasure.webp", 2);
+    clouds[2] = mesh_to_gaussians("ground.obj", "ground.webp", 10);
 
     // Allocate frames
     unsigned char** frames = malloc(frame_count * sizeof(unsigned char*));
