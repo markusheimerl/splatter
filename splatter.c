@@ -184,7 +184,6 @@ Vec3 sample_texture(const Mesh* mesh, float u, float v) {
 Mesh load_mesh(const char* obj_file, const char* texture_file) {
     Mesh mesh = {0};
     
-    // Load OBJ
     Vec3* vertices = malloc(1000000 * sizeof(Vec3));
     Vec2* texcoords = malloc(1000000 * sizeof(Vec2));
     int vertex_count = 0, texcoord_count = 0;
@@ -229,7 +228,6 @@ Mesh load_mesh(const char* obj_file, const char* texture_file) {
     free(vertices);
     free(texcoords);
 
-    // Load texture
     FILE* tex_file = fopen(texture_file, "rb");
     if (!tex_file) {
         fprintf(stderr, "Failed to open %s\n", texture_file);
@@ -288,7 +286,7 @@ GaussianCloud mesh_to_gaussians(const char* obj_file, const char* texture_file, 
         Vec3 edge1 = vec3_sub(tri->v1, tri->v0);
         Vec3 edge2 = vec3_sub(tri->v2, tri->v0);
         float area = vec3_length(vec3_cross(edge1, edge2)) * 0.5f;
-        float size = sqrtf(area / samples) * 0.35f;  // Reduced from 0.7
+        float size = sqrtf(area / samples) * 0.15f;  // Much smaller!
 
         for (int s = 0; s < samples; s++) {
             float r1 = (float)rand() / (float)RAND_MAX;
@@ -312,7 +310,7 @@ GaussianCloud mesh_to_gaussians(const char* obj_file, const char* texture_file, 
             g.position = pos;
             g.radius = size;
             g.color = sample_texture(&mesh, uv.u, uv.v);
-            g.opacity = 0.7f;  // Reduced from 0.9
+            g.opacity = 0.5f;  // Lower opacity
 
             add_gaussian(&cloud, g);
         }
@@ -338,7 +336,6 @@ typedef struct {
 } DepthIndex;
 
 int compare_depth(const void* a, const void* b) {
-    // Sort BACK TO FRONT (larger depth first)
     float diff = ((DepthIndex*)a)->depth - ((DepthIndex*)b)->depth;
     return (diff < 0) ? 1 : (diff > 0 ? -1 : 0);
 }
@@ -347,10 +344,10 @@ void render_frame(GaussianCloud* clouds, int cloud_count, Camera* camera,
                   unsigned char* frame, int width, int height) {
     float aspect = (float)width / height;
     
-    // Camera basis vectors - MATCH RAYTRACER
+    // EXACT same camera setup as raytracer
     Vec3 forward = vec3_normalize(vec3_sub(camera->look_at, camera->position));
     Vec3 right = vec3_normalize(vec3_cross(forward, camera->up));
-    Vec3 up = vec3_cross(right, forward);
+    Vec3 camera_up = vec3_cross(right, forward);  // Note: camera_up, not just up
     float scale = tanf((camera->fov * 0.5f) * M_PI / 180.0f);
 
     // Count total gaussians
@@ -380,25 +377,28 @@ void render_frame(GaussianCloud* clouds, int cloud_count, Camera* camera,
             Gaussian* g = &clouds[c].gaussians[i];
             Vec3 world_pos = mat4_transform_point(transform, g->position);
 
-            // Transform to camera space
+            // Transform to camera space - EXACT same as raytracer
             Vec3 cam_pos = vec3_sub(world_pos, camera->position);
             float x = vec3_dot(cam_pos, right);
-            float y = vec3_dot(cam_pos, up);
+            float y = vec3_dot(cam_pos, camera_up);  // Use camera_up!
             float z = vec3_dot(cam_pos, forward);
 
             if (z > 0.1f) {
                 indices[idx].depth = z;
                 indices[idx].index = idx;
                 
-                // Project to NDC then to screen - MATCH RAYTRACER
-                float ndc_x = x / (z * aspect * scale);
-                float ndc_y = -y / (z * scale);  // Note the negation for Y
+                // Inverse of raytracer projection
+                // raytracer: ray_x = (2*screen_x - 1) * aspect * scale
+                // inverse: screen_x = (ray_x / (aspect * scale) + 1) / 2
+                float ray_x = x / z;
+                float ray_y = y / z;
                 
-                screen_x[idx] = (ndc_x + 1.0f) * 0.5f;
-                screen_y[idx] = (1.0f - ndc_y) * 0.5f;  // Flip Y for screen coords
+                screen_x[idx] = (ray_x / (aspect * scale) + 1.0f) * 0.5f;
+                screen_y[idx] = (1.0f - ray_y / scale) * 0.5f;
                 
-                // Perspective-correct radius
-                screen_radius[idx] = g->radius / (z * scale);
+                // Perspective-correct radius in pixels
+                float radius_world = g->radius;
+                screen_radius[idx] = radius_world / (z * scale) * height * 0.5f / width;
                 
                 colors[idx] = g->color;
                 opacities[idx] = g->opacity;
@@ -408,25 +408,23 @@ void render_frame(GaussianCloud* clouds, int cloud_count, Camera* camera,
     }
     total = idx;
 
-    // Sort by depth (back to front)
     qsort(indices, total, sizeof(DepthIndex), compare_depth);
 
     // Clear frame
     memset(frame, 50, width * height * 3);
 
-    // Render gaussians with proper alpha blending
+    // Render gaussians
     #pragma omp parallel for schedule(dynamic, 4)
     for (int y = 0; y < height; y++) {
         for (int x = 0; x < width; x++) {
             float px = (float)x / width;
             float py = (float)y / height;
 
-            Vec3 color = {0.05f, 0.05f, 0.05f};  // Background
+            Vec3 color = {0.05f, 0.05f, 0.05f};
             float transmittance = 1.0f;
 
-            // Blend gaussians back to front
             for (size_t i = 0; i < total; i++) {
-                if (transmittance < 0.01f) break;  // Early termination
+                if (transmittance < 0.001f) break;
 
                 int idx = indices[i].index;
                 
@@ -434,11 +432,10 @@ void render_frame(GaussianCloud* clouds, int cloud_count, Camera* camera,
                 float dy = py - screen_y[idx];
                 float dist2 = (dx * dx + dy * dy) / (screen_radius[idx] * screen_radius[idx]);
 
-                if (dist2 < 9.0f) {  // 3 sigma cutoff
+                if (dist2 < 9.0f) {
                     float gauss = expf(-0.5f * dist2);
-                    float alpha = opacities[idx] * gauss;
+                    float alpha = fminf(opacities[idx] * gauss, 0.99f);
                     
-                    // Alpha blend
                     color = vec3_add(color, vec3_mul(colors[idx], alpha * transmittance));
                     transmittance *= (1.0f - alpha);
                 }
@@ -486,61 +483,6 @@ void update_progress(int frame, int total, clock_t start) {
 }
 
 // ============================================================================
-// IMAGE SCALING
-// ============================================================================
-
-float cubic_hermite(float A, float B, float C, float D, float t) {
-    float a = -A/2.0f + (3.0f*B)/2.0f - (3.0f*C)/2.0f + D/2.0f;
-    float b = A - (5.0f*B)/2.0f + 2.0f*C - D/2.0f;
-    float c = -A/2.0f + C/2.0f;
-    float d = B;
-    return a*t*t*t + b*t*t + c*t + d;
-}
-
-uint32_t get_pixel(unsigned char* frame, int x, int y, int w, int h) {
-    if (x < 0) x = 0;
-    if (y < 0) y = 0;
-    if (x >= w) x = w - 1;
-    if (y >= h) y = h - 1;
-    int idx = (y * w + x) * 3;
-    return (frame[idx] << 16) | (frame[idx + 1] << 8) | frame[idx + 2];
-}
-
-uint32_t bicubic(unsigned char* frame, float x, float y, int w, int h) {
-    int x1 = (int)x;
-    int y1 = (int)y;
-    float fx = x - x1;
-    float fy = y - y1;
-
-    uint32_t p[4][4];
-    for (int dy = -1; dy <= 2; dy++) {
-        for (int dx = -1; dx <= 2; dx++) {
-            p[dy+1][dx+1] = get_pixel(frame, x1 + dx, y1 + dy, w, h);
-        }
-    }
-
-    float r[4], g[4], b[4];
-    for (int i = 0; i < 4; i++) {
-        r[i] = cubic_hermite((p[i][0]>>16)&0xFF, (p[i][1]>>16)&0xFF,
-                             (p[i][2]>>16)&0xFF, (p[i][3]>>16)&0xFF, fx);
-        g[i] = cubic_hermite((p[i][0]>>8)&0xFF, (p[i][1]>>8)&0xFF,
-                             (p[i][2]>>8)&0xFF, (p[i][3]>>8)&0xFF, fx);
-        b[i] = cubic_hermite(p[i][0]&0xFF, p[i][1]&0xFF,
-                             p[i][2]&0xFF, p[i][3]&0xFF, fx);
-    }
-
-    int ri = (int)(cubic_hermite(r[0], r[1], r[2], r[3], fy) + 0.5f);
-    int gi = (int)(cubic_hermite(g[0], g[1], g[2], g[3], fy) + 0.5f);
-    int bi = (int)(cubic_hermite(b[0], b[1], b[2], b[3], fy) + 0.5f);
-
-    ri = ri < 0 ? 0 : (ri > 255 ? 255 : ri);
-    gi = gi < 0 ? 0 : (gi > 255 ? 255 : gi);
-    bi = bi < 0 ? 0 : (bi > 255 ? 255 : bi);
-
-    return (0xFF << 24) | (ri << 16) | (gi << 8) | bi;
-}
-
-// ============================================================================
 // MAIN
 // ============================================================================
 
@@ -548,10 +490,8 @@ int main() {
     srand(time(NULL));
     
     int width = 800, height = 600;
-    int render_width = (int)(width * 0.9f);
-    int render_height = (int)(height * 0.9f);
     int fps = 24;
-    int duration_ms = 4000;
+    int duration_ms = 1000;
     int frame_count = (duration_ms * fps) / 1000;
 
     Camera camera = {
@@ -561,12 +501,12 @@ int main() {
         .fov = 60.0f
     };
 
-    // Create clouds
+    // Create clouds with MORE samples
     printf("Loading meshes and creating gaussian clouds...\n");
     GaussianCloud clouds[3];
-    clouds[0] = mesh_to_gaussians("drone.obj", "drone.webp", 5);  // Increased samples
-    clouds[1] = mesh_to_gaussians("treasure.obj", "treasure.webp", 4);
-    clouds[2] = mesh_to_gaussians("ground.obj", "ground.webp", 3);
+    clouds[0] = mesh_to_gaussians("drone.obj", "drone.webp", 10);
+    clouds[1] = mesh_to_gaussians("treasure.obj", "treasure.webp", 8);
+    clouds[2] = mesh_to_gaussians("ground.obj", "ground.webp", 5);
 
     // Allocate frames
     unsigned char** frames = malloc(frame_count * sizeof(unsigned char*));
@@ -587,24 +527,7 @@ int main() {
         clouds[1].position = (Vec3){1.0f, 0.5f + 0.1f * sinf(t), 1.0f};
         clouds[1].rotation = (Vec3){0, t * 0.5f, 0};
 
-        unsigned char* render_frame_buf = malloc(render_width * render_height * 3);
-        render_frame(clouds, 3, &camera, render_frame_buf, render_width, render_height);
-
-        // Scale up
-        #pragma omp parallel for schedule(static)
-        for (int y = 0; y < height; y++) {
-            for (int x = 0; x < width; x++) {
-                float sx = x * (render_width - 1.0f) / (width - 1.0f);
-                float sy = y * (render_height - 1.0f) / (height - 1.0f);
-                uint32_t pixel = bicubic(render_frame_buf, sx, sy, render_width, render_height);
-                
-                int idx = (y * width + x) * 3;
-                frames[f][idx] = (pixel >> 16) & 0xFF;
-                frames[f][idx + 1] = (pixel >> 8) & 0xFF;
-                frames[f][idx + 2] = pixel & 0xFF;
-            }
-        }
-        free(render_frame_buf);
+        render_frame(clouds, 3, &camera, frames[f], width, height);
 
         update_progress(f, frame_count, start);
     }
