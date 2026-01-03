@@ -344,7 +344,6 @@ void render_frame(GaussianCloud* clouds, int cloud_count, Camera* camera,
                   unsigned char* frame, int width, int height) {
     float aspect = (float)width / height;
     
-    // EXACT same camera setup as raytracer
     Vec3 forward = vec3_normalize(vec3_sub(camera->look_at, camera->position));
     Vec3 right = vec3_normalize(vec3_cross(forward, camera->up));
     Vec3 camera_up = vec3_cross(right, forward);
