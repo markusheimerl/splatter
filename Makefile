@@ -1,6 +1,6 @@
 CC = clang
 CFLAGS = -O3 -march=native -Wall -Wextra -fopenmp
-LDFLAGS = -lm -lwebp -lwebpmux -fopenmp
+LDFLAGS = -lm -fopenmp -lpng -ljson-c
 
 splatter.out: splatter.c
 	$(CC) $(CFLAGS) splatter.c $(LDFLAGS) -o splatter.out
