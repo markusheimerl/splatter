@@ -134,7 +134,7 @@ Camera* load_camera(const char* json_path, int frame_idx) {
 
 #define NUM_GAUSSIANS 5
 #define PARAMS_PER_GAUSSIAN 7
-#define PATCH_SIZE 16
+#define PATCH_SIZE 128
 
 // Forward pass: render multiple Gaussians to one pixel
 void render_pixel_multi(
